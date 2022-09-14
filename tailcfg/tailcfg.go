@@ -79,7 +79,8 @@ type CapabilityVersion int
 //   - 40: 2022-08-22: added Node.KeySignature, PeersChangedPatch.KeySignature
 //   - 41: 2022-08-30: uses 100.100.100.100 for route-less ExtraRecords if global nameservers is set
 //   - 42: 2022-09-06: NextDNS DoH support; see https://github.com/tailscale/tailscale/pull/5556
-const CurrentCapabilityVersion CapabilityVersion = 42
+//   - 43: 2022-09-14: adds Debug.EnableSilentDisco
+const CurrentCapabilityVersion CapabilityVersion = 43
 
 type StableID string
 
@@ -1455,6 +1456,10 @@ type Debug struct {
 	// DisableLogTail disables the logtail package. Once disabled it can't be
 	// re-enabled for the lifetime of the process.
 	DisableLogTail bool `json:",omitempty"`
+
+	// EnableSilentDisco disables the use of heartBeatTimer in magicsock and attempts to
+	// handle disco silently.
+	EnableSilentDisco bool `json:",omitempty"`
 
 	// Exit optionally specifies that the client should os.Exit
 	// with this code.

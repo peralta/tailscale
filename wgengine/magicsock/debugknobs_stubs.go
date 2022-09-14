@@ -19,6 +19,7 @@ const (
 	logDerpVerbose                   = false
 	debugReSTUNStopOnIdle            = false
 	debugAlwaysDERP                  = false
+	debugEnableSilentDisco           = false
 )
 
 func inTest() bool { return false }
