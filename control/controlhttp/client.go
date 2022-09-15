@@ -52,16 +52,16 @@ import (
 //
 // The provided ctx is only used for the initial connection, until
 // Dial returns. It does not affect the connection once established.
-func Dial(ctx context.Context, host string, httpPort string, httpsPort string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
+func Dial(ctx context.Context, opts DialOpts) (*controlbase.Conn, error) {
 	a := &dialParams{
-		host:       host,
-		httpPort:   httpPort,
-		httpsPort:  httpsPort,
-		machineKey: machineKey,
-		controlKey: controlKey,
-		version:    protocolVersion,
+		host:       opts.Host,
+		httpPort:   opts.HTTPPort,
+		httpsPort:  opts.HTTPSPort,
+		machineKey: opts.MachineKey,
+		controlKey: opts.ControlKey,
+		version:    opts.ProtocolVersion,
 		proxyFunc:  tshttpproxy.ProxyFromEnvironment,
-		dialer:     dialer,
+		dialer:     opts.Dialer,
 	}
 	return a.dial(ctx)
 }

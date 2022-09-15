@@ -12,22 +12,21 @@ import (
 
 	"nhooyr.io/websocket"
 	"tailscale.com/control/controlbase"
-	"tailscale.com/net/dnscache"
-	"tailscale.com/types/key"
 )
 
 // Variant of Dial that tunnels the request over WebSockets, since we cannot do
 // bi-directional communication over an HTTP connection when in JS.
-func Dial(ctx context.Context, host string, httpPort string, httpsPort string, machineKey key.MachinePrivate, controlKey key.MachinePublic, protocolVersion uint16, dialer dnscache.DialContextFunc) (*controlbase.Conn, error) {
-	init, cont, err := controlbase.ClientDeferred(machineKey, controlKey, protocolVersion)
+func Dial(ctx context.Context, opts DialOpts) (*controlbase.Conn, error) {
+	init, cont, err := controlbase.ClientDeferred(opts.MachineKey, opts.ControlKey, opts.ProtocolVersion)
 	if err != nil {
 		return nil, err
 	}
 
 	wsScheme := "wss"
+	host := opts.Host
 	if host == "localhost" {
 		wsScheme = "ws"
-		host = net.JoinHostPort(host, httpPort)
+		host = net.JoinHostPort(host, opts.HTTPPort)
 	}
 	wsURL := &url.URL{
 		Scheme: wsScheme,
@@ -52,5 +51,4 @@ func Dial(ctx context.Context, host string, httpPort string, httpsPort string, m
 		return nil, err
 	}
 	return cbConn, nil
-
 }
