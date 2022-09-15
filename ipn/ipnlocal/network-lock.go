@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"time"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/envknob"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/logtail/backoff"
@@ -135,6 +136,122 @@ func (b *LocalBackend) NetworkLockInit(keys []tka.Key) error {
 	// Finalize enablement by transmitting signature for all nodes to Control.
 	_, err = b.tkaInitFinish(nm, sigs)
 	return err
+}
+
+// NetworkLockModify adds and/or removes keys in the tailnet's key authority.
+func (b *LocalBackend) NetworkLockModify(addKeys, removeKeys []tka.Key) (err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("modify network-lock keys: %w", err)
+		}
+	}()
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.tka == nil {
+		return errors.New("network-lock is not initialized")
+	}
+	if !networkLockAvailable {
+		return errors.New("this is an experimental feature in your version of tailscale - Please upgrade to the latest to use this.")
+	}
+	if !b.CanSupportNetworkLock() {
+		return errors.New("network-lock is not supported in this configuration. Did you supply a --statedir?")
+	}
+	nm := b.NetMap()
+	if nm == nil {
+		return errors.New("no netmap: are you logged into tailscale?")
+	}
+
+	updater := b.tka.authority.NewUpdater(b.nlPrivKey)
+
+	for _, addKey := range addKeys {
+		if err := updater.AddKey(addKey); err != nil {
+			return err
+		}
+	}
+	for _, removeKey := range removeKeys {
+		if err := updater.RemoveKey(removeKey.ID()); err != nil {
+			return err
+		}
+	}
+
+	aums, err := updater.Finalize()
+	if err != nil {
+		return err
+	}
+
+	if len(aums) == 0 {
+		return nil
+	}
+
+	// Submitting AUMs may block, so release the lock
+	b.mu.Unlock()
+	head, err := b.sendAUMs(aums)
+	b.mu.Lock()
+	if err != nil {
+		return err
+	}
+
+	lastHead := aums[len(aums)-1].Hash()
+	if !slices.Equal(head[:], lastHead[:]) {
+		return errors.New("central tka head differs from submitted AUM, try again")
+	}
+
+	if err := b.tka.authority.Inform(b.tka.storage, aums); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (b *LocalBackend) sendAUMs(aums []tka.AUM) (head tka.AUMHash, err error) {
+	mAUMs := make([]tkatype.MarshaledAUM, len(aums))
+	for i := range aums {
+		mAUMs[i] = aums[i].Serialize()
+	}
+
+	var req bytes.Buffer
+	if err := json.NewEncoder(&req).Encode(tailcfg.TKASyncSendRequest{
+		MissingAUMs: mAUMs,
+	}); err != nil {
+		return head, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	bo := backoff.NewBackoff("tka-submit", b.logf, 5*time.Second)
+	var res *http.Response
+	for {
+		if err := ctx.Err(); err != nil {
+			return head, err
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://unused/machine/tka/sync/send", &req)
+		if err != nil {
+			return head, err
+		}
+		res, err = b.DoNoiseRequest(req)
+		bo.BackOff(ctx, err)
+		if err == nil {
+			break
+		}
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		body, _ := io.ReadAll(res.Body)
+		return head, fmt.Errorf("submit status %d: %s", res.StatusCode, string(body))
+	}
+	a := new(tailcfg.TKASyncSendResponse)
+	if err := json.NewDecoder(res.Body).Decode(a); err != nil {
+		return head, err
+	}
+
+	if err := head.UnmarshalText([]byte(a.Head)); err != nil {
+		return head, err
+	}
+
+	return head, nil
 }
 
 func signNodeKey(nodeInfo tailcfg.TKASignInfo, signer key.NLPrivate) (*tka.NodeKeySignature, error) {
