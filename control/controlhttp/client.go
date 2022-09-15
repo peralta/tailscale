@@ -46,8 +46,6 @@ import (
 	"tailscale.com/net/tlsdial"
 	"tailscale.com/net/tshttpproxy"
 	"tailscale.com/tailcfg"
-	"tailscale.com/types/key"
-	"tailscale.com/types/logger"
 )
 
 // Dial connects to the HTTP server at host:httpPort, requests to switch to the
@@ -59,60 +57,36 @@ import (
 //
 // The provided ctx is only used for the initial connection, until
 // Dial returns. It does not affect the connection once established.
-func Dial(ctx context.Context, opts DialOpts) (*controlbase.Conn, error) {
-	a := &dialParams{
-		host:       opts.Host,
-		httpPort:   opts.HTTPPort,
-		httpsPort:  opts.HTTPSPort,
-		machineKey: opts.MachineKey,
-		controlKey: opts.ControlKey,
-		version:    opts.ProtocolVersion,
-		proxyFunc:  tshttpproxy.ProxyFromEnvironment,
-		dialer:     opts.Dialer,
-		dialPlan:   opts.DialPlan,
-		logf:       opts.Logf,
-	}
-	if a.logf == nil {
-		a.logf = func(string, ...any) {}
+func (a *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
+	if a.proxyFunc == nil {
+		a.proxyFunc = tshttpproxy.ProxyFromEnvironment
 	}
 	return a.dial(ctx)
 }
 
-type dialParams struct {
-	host       string
-	httpPort   string
-	httpsPort  string
-	machineKey key.MachinePrivate
-	controlKey key.MachinePublic
-	version    uint16
-	proxyFunc  func(*http.Request) (*url.URL, error) // or nil
-	dialer     dnscache.DialContextFunc
-	dialPlan   *atomic.Pointer[tailcfg.ControlDialPlan]
-	logf       logger.Logf
-
-	// For tests only
-	insecureTLS       bool
-	testFallbackDelay time.Duration
-	drainFinished     chan struct{}
+func (a *Dialer) logf(format string, args ...any) {
+	if a.Logf != nil {
+		a.Logf(format, args...)
+	}
 }
 
-// httpsFallbackDelay is how long we'll wait for a.httpPort to work before
-// starting to try a.httpsPort.
-func (a *dialParams) httpsFallbackDelay() time.Duration {
+// httpsFallbackDelay is how long we'll wait for a.HTTPPort to work before
+// starting to try a.HTTPSPort.
+func (a *Dialer) httpsFallbackDelay() time.Duration {
 	if v := a.testFallbackDelay; v != 0 {
 		return v
 	}
 	return 500 * time.Millisecond
 }
 
-func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
+func (a *Dialer) dial(ctx context.Context) (*controlbase.Conn, error) {
 	// If we don't have a dial plan, just fall back to dialing the single
 	// host we know about.
 	useDialPlan := envknob.BoolDefaultTrue("TS_USE_CONTROL_DIAL_PLAN")
-	if !useDialPlan || a.dialPlan == nil {
+	if !useDialPlan || a.DialPlan == nil {
 		return a.dialHost(ctx, netip.Addr{})
 	}
-	dp := a.dialPlan.Load()
+	dp := a.DialPlan.Load()
 	if dp == nil || len(dp.Candidates) == 0 {
 		return a.dialHost(ctx, netip.Addr{})
 	}
@@ -163,7 +137,7 @@ func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
 			// If non-zero, wait the configured start timeout
 			// before we do anything.
 			if c.DialStartDelaySec > 0 {
-				a.logf("[v2] controlhttp: waiting %.2f seconds before dialing %q @ %v", c.DialStartDelaySec, a.host, c.IP)
+				a.logf("[v2] controlhttp: waiting %.2f seconds before dialing %q @ %v", c.DialStartDelaySec, a.Host, c.IP)
 				tmr := time.NewTimer(time.Duration(c.DialStartDelaySec * float64(time.Second)))
 				defer tmr.Stop()
 				select {
@@ -180,7 +154,7 @@ func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
 			defer cancel()
 
 			// This will dial, and the defer above sends it back to our parent.
-			a.logf("[v2] controlhttp: trying to dial %q @ %v", a.host, c.IP)
+			a.logf("[v2] controlhttp: trying to dial %q @ %v", a.Host, c.IP)
 			conn, err = a.dialHost(ctx, c.IP)
 		}(ctx, c)
 	}
@@ -195,7 +169,7 @@ func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
 		// the highest remaining priority dynamically, instead of just
 		// checking for the highest total
 		if res.priority == highestPriority && res.conn != nil {
-			a.logf("[v1] controlhttp: high-priority success dialing %q @ %v from dial plan", a.host, res.addr)
+			a.logf("[v1] controlhttp: high-priority success dialing %q @ %v from dial plan", a.Host, res.addr)
 
 			// Drain the channel and any existing connections in
 			// the background.
@@ -252,7 +226,7 @@ func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
 			continue
 		}
 
-		a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.host, result.addr)
+		a.logf("[v1] controlhttp: succeeded dialing %q @ %v from dial plan", a.Host, result.addr)
 		conn = result.conn
 		results[i].conn = nil // so we don't close it in the defer
 		return conn, nil
@@ -263,7 +237,7 @@ func (a *dialParams) dial(ctx context.Context) (*controlbase.Conn, error) {
 	return a.dialHost(ctx, netip.Addr{})
 }
 
-func (a *dialParams) dialHost(ctx context.Context, addr netip.Addr) (*controlbase.Conn, error) {
+func (a *Dialer) dialHost(ctx context.Context, addr netip.Addr) (*controlbase.Conn, error) {
 	// Create one shared context used by both port 80 and port 443 dials.
 	// If port 80 is still in flight when 443 returns, this deferred cancel
 	// will stop the port 80 dial.
@@ -275,12 +249,12 @@ func (a *dialParams) dialHost(ctx context.Context, addr netip.Addr) (*controlbas
 	// we'll speak Noise.
 	u80 := &url.URL{
 		Scheme: "http",
-		Host:   net.JoinHostPort(a.host, a.httpPort),
+		Host:   net.JoinHostPort(a.Host, a.HTTPPort),
 		Path:   serverUpgradePath,
 	}
 	u443 := &url.URL{
 		Scheme: "https",
-		Host:   net.JoinHostPort(a.host, a.httpsPort),
+		Host:   net.JoinHostPort(a.Host, a.HTTPSPort),
 		Path:   serverUpgradePath,
 	}
 
@@ -342,8 +316,8 @@ func (a *dialParams) dialHost(ctx context.Context, addr netip.Addr) (*controlbas
 }
 
 // dialURL attempts to connect to the given URL.
-func (a *dialParams) dialURL(ctx context.Context, u *url.URL, addr netip.Addr) (*controlbase.Conn, error) {
-	init, cont, err := controlbase.ClientDeferred(a.machineKey, a.controlKey, a.version)
+func (a *Dialer) dialURL(ctx context.Context, u *url.URL, addr netip.Addr) (*controlbase.Conn, error) {
+	init, cont, err := controlbase.ClientDeferred(a.MachineKey, a.ControlKey, a.ProtocolVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +336,7 @@ func (a *dialParams) dialURL(ctx context.Context, u *url.URL, addr netip.Addr) (
 // tryURLUpgrade connects to u, and tries to upgrade it to a net.Conn.
 //
 // Only the provided ctx is used, not a.ctx.
-func (a *dialParams) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr, init []byte) (net.Conn, error) {
+func (a *Dialer) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.Addr, init []byte) (net.Conn, error) {
 	var dns *dnscache.Resolver
 
 	// If we were provided an address to dial, then create a resolver that just
@@ -384,16 +358,16 @@ func (a *dialParams) tryURLUpgrade(ctx context.Context, u *url.URL, addr netip.A
 	defer tr.CloseIdleConnections()
 	tr.Proxy = a.proxyFunc
 	tshttpproxy.SetTransportGetProxyConnectHeader(tr)
-	tr.DialContext = dnscache.Dialer(a.dialer, dns)
+	tr.DialContext = dnscache.Dialer(a.Dialer, dns)
 	// Disable HTTP2, since h2 can't do protocol switching.
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	tr.TLSClientConfig = tlsdial.Config(a.host, tr.TLSClientConfig)
+	tr.TLSClientConfig = tlsdial.Config(a.Host, tr.TLSClientConfig)
 	if a.insecureTLS {
 		tr.TLSClientConfig.InsecureSkipVerify = true
 		tr.TLSClientConfig.VerifyConnection = nil
 	}
-	tr.DialTLSContext = dnscache.TLSDialer(a.dialer, dns, tr.TLSClientConfig)
+	tr.DialTLSContext = dnscache.TLSDialer(a.Dialer, dns, tr.TLSClientConfig)
 	tr.DisableCompression = true
 
 	// (mis)use httptrace to extract the underlying net.Conn from the

@@ -16,17 +16,17 @@ import (
 
 // Variant of Dial that tunnels the request over WebSockets, since we cannot do
 // bi-directional communication over an HTTP connection when in JS.
-func Dial(ctx context.Context, opts DialOpts) (*controlbase.Conn, error) {
-	init, cont, err := controlbase.ClientDeferred(opts.MachineKey, opts.ControlKey, opts.ProtocolVersion)
+func (d *Dialer) Dial(ctx context.Context) (*controlbase.Conn, error) {
+	init, cont, err := controlbase.ClientDeferred(d.MachineKey, d.ControlKey, d.ProtocolVersion)
 	if err != nil {
 		return nil, err
 	}
 
 	wsScheme := "wss"
-	host := opts.Host
+	host := d.Host
 	if host == "localhost" {
 		wsScheme = "ws"
-		host = net.JoinHostPort(host, opts.HTTPPort)
+		host = net.JoinHostPort(host, d.HTTPPort)
 	}
 	wsURL := &url.URL{
 		Scheme: wsScheme,

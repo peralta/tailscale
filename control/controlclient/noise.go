@@ -173,7 +173,7 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 		// thousand version numbers before getting to this point.
 		panic("capability version is too high to fit in the wire protocol")
 	}
-	conn, err := controlhttp.Dial(ctx, controlhttp.DialOpts{
+	conn, err := (&controlhttp.Dialer{
 		Host:            nc.host,
 		HTTPPort:        nc.httpPort,
 		HTTPSPort:       nc.httpsPort,
@@ -186,7 +186,7 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 		// TODO(andrew): remove after testing
 		Logf:     log.Printf,
 		DialPlan: fakeDialPlan,
-	})
+	}).Dial(ctx)
 	if err != nil {
 		return nil, err
 	}

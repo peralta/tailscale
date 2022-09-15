@@ -176,17 +176,17 @@ func testControlHTTP(t *testing.T, param httpTestParam) {
 		defer cancel()
 	}
 
-	a := dialParams{
-		host:              "localhost",
-		httpPort:          strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
-		httpsPort:         strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
-		machineKey:        client,
-		controlKey:        server.Public(),
-		version:           testProtocolVersion,
+	a := Dialer{
+		Host:              "localhost",
+		HTTPPort:          strconv.Itoa(httpLn.Addr().(*net.TCPAddr).Port),
+		HTTPSPort:         strconv.Itoa(httpsLn.Addr().(*net.TCPAddr).Port),
+		MachineKey:        client,
+		ControlKey:        server.Public(),
+		ProtocolVersion:   testProtocolVersion,
+		Dialer:            new(tsdial.Dialer).SystemDial,
+		Logf:              t.Logf,
 		insecureTLS:       true,
-		dialer:            new(tsdial.Dialer).SystemDial,
 		testFallbackDelay: 50 * time.Millisecond,
-		logf:              t.Logf,
 	}
 
 	if proxy != nil {
@@ -608,20 +608,20 @@ func TestDialPlan(t *testing.T) {
 			drained := make(chan struct{})
 			var plan atomic.Pointer[tailcfg.ControlDialPlan]
 			plan.Store(tt.plan)
-			a := dialParams{
-				host:              host,
-				httpPort:          httpPort,
-				httpsPort:         httpsPort,
-				machineKey:        client,
-				controlKey:        server.Public(),
-				version:           testProtocolVersion,
-				insecureTLS:       true,
-				dialer:            dialer.Dial,
-				testFallbackDelay: 50 * time.Millisecond,
-				dialPlan:          &plan,
+			a := Dialer{
+				Host:              host,
+				HTTPPort:          httpPort,
+				HTTPSPort:         httpsPort,
+				MachineKey:        client,
+				ControlKey:        server.Public(),
+				ProtocolVersion:   testProtocolVersion,
+				Dialer:            dialer.Dial,
+				DialPlan:          &plan,
+				Logf:              t.Logf,
 				proxyFunc:         func(*http.Request) (*url.URL, error) { return nil, nil },
-				logf:              t.Logf,
 				drainFinished:     drained,
+				insecureTLS:       true,
+				testFallbackDelay: 50 * time.Millisecond,
 			}
 
 			conn, err := a.dial(ctx)

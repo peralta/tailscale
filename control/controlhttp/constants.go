@@ -5,7 +5,10 @@
 package controlhttp
 
 import (
+	"net/http"
+	"net/url"
 	"sync/atomic"
+	"time"
 
 	"tailscale.com/net/dnscache"
 	"tailscale.com/tailcfg"
@@ -28,32 +31,42 @@ const (
 	serverUpgradePath = "/ts2021"
 )
 
-// DialOpts contains options when calling Dial.
-type DialOpts struct {
-	// The following fields are required
-
+// Dialer contains configuration on how to dial the Tailscale control server.
+type Dialer struct {
 	// Host is the host to connect to.
+	//
+	// This field is required.
 	Host string
 
 	// HTTPPort is the port number to use when making a HTTP connection.
+	//
+	// This field is required.
 	HTTPPort string
 
 	// HTTPSPort is the port number to use when making a HTTPS connection.
+	//
+	// This field is required.
 	HTTPSPort string
 
 	// MachineKey contains the current machine's private key.
+	//
+	// This field is required.
 	MachineKey key.MachinePrivate
 
 	// ControlKey contains the expected public key for the control server.
+	//
+	// This field is required.
 	ControlKey key.MachinePublic
 
 	// ProtocolVersion is the expected protocol version to negotiate.
+	//
+	// This field is required.
 	ProtocolVersion uint16
 
 	// Dialer is the dialer used to make outbound connections.
+	//
+	// This field is required.
 	Dialer dnscache.DialContextFunc
-
-	// The following fields are optional.
 
 	// Logf, if set, is a logging function to use; if unset, logs are
 	// dropped.
@@ -63,4 +76,11 @@ type DialOpts struct {
 	// how to connect to it. If present, we will try the methods in this
 	// plan before falling back to DNS.
 	DialPlan *atomic.Pointer[tailcfg.ControlDialPlan]
+
+	proxyFunc func(*http.Request) (*url.URL, error) // or nil
+
+	// For tests only
+	drainFinished     chan struct{}
+	insecureTLS       bool
+	testFallbackDelay time.Duration
 }
