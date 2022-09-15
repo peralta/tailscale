@@ -7,11 +7,14 @@ package controlclient
 import (
 	"context"
 	"crypto/tls"
+	"log"
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -53,6 +56,10 @@ type noiseClient struct {
 	httpPort     string // the default port to call
 	httpsPort    string // the fallback Noise-over-https port
 
+	// Optional DialPlan received from the control server previously; can
+	// be nil.
+	dialPlan *atomic.Pointer[tailcfg.ControlDialPlan]
+
 	// mu only protects the following variables.
 	mu       sync.Mutex
 	nextID   int
@@ -61,7 +68,7 @@ type noiseClient struct {
 
 // newNoiseClient returns a new noiseClient for the provided server and machine key.
 // serverURL is of the form https://<host>:<port> (no trailing slash).
-func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer) (*noiseClient, error) {
+func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, serverURL string, dialer *tsdial.Dialer, dialPlan *atomic.Pointer[tailcfg.ControlDialPlan]) (*noiseClient, error) {
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		return nil, err
@@ -89,6 +96,7 @@ func newNoiseClient(priKey key.MachinePrivate, serverPubKey key.MachinePublic, s
 		httpPort:     httpPort,
 		httpsPort:    httpsPort,
 		dialer:       dialer,
+		dialPlan:     dialPlan,
 	}
 
 	// Create the HTTP/2 Transport using a net/http.Transport
@@ -173,6 +181,11 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 		ControlKey:      nc.serverPubKey,
 		ProtocolVersion: uint16(tailcfg.CurrentCapabilityVersion),
 		Dialer:          nc.dialer.SystemDial,
+		//DialPlan:        nc.dialPlan,
+
+		// TODO(andrew): remove after testing
+		Logf:     log.Printf,
+		DialPlan: fakeDialPlan,
 	})
 	if err != nil {
 		return nil, err
@@ -184,3 +197,19 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	mak.Set(&nc.connPool, ncc.id, ncc)
 	return ncc, nil
 }
+
+// TODO(andrew): remove after testing
+var fakeDialPlan = (func() *atomic.Pointer[tailcfg.ControlDialPlan] {
+	ret := new(atomic.Pointer[tailcfg.ControlDialPlan])
+	ret.Store(&tailcfg.ControlDialPlan{
+		Candidates: []tailcfg.ControlIPCandidate{
+			// First; fails
+			{IP: netip.MustParseAddr("13.0.0.1"), DialTimeoutSec: 10, Priority: 3},
+
+			// Succeed
+			{IP: netip.MustParseAddr("18.157.173.201"), DialStartDelaySec: 0.5, DialTimeoutSec: 9.5, Priority: 1},
+			{IP: netip.MustParseAddr("2a05:d014:386:201:7200:6340:b22f:7df6"), DialStartDelaySec: 0.5, DialTimeoutSec: 9.5, Priority: 2},
+		},
+	})
+	return ret
+})()
