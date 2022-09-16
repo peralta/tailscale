@@ -163,16 +163,53 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 	nc.nextID++
 	nc.mu.Unlock()
 
-	// Timeout is a little arbitrary, but plenty long enough for even the
-	// highest latency links.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	if tailcfg.CurrentCapabilityVersion > math.MaxUint16 {
 		// Panic, because a test should have started failing several
 		// thousand version numbers before getting to this point.
 		panic("capability version is too high to fit in the wire protocol")
 	}
+
+	// TODO(andrew): remove after testing
+	//dialPlan := nc.dialPlan
+	dialPlan := fakeDialPlan
+
+	// If we have a dial plan, then set our timeout as slightly longer than
+	// the maximum amount of time contained therein; we assume that
+	// explicit instructions on timeouts are more useful than a single
+	// hard-coded timeout.
+	//
+	// The default value of 5 is chosen so that, when there's no dial plan,
+	// we retain the previous behaviour of 10 seconds end-to-end timeout.
+	var timeoutSec float64 = 5
+	if dialPlan != nil {
+		if dp := dialPlan.Load(); dp != nil && len(dp.Candidates) > 0 {
+			for _, c := range dp.Candidates {
+				if v := c.DialStartDelaySec + c.DialTimeoutSec; v > timeoutSec {
+					timeoutSec = v
+				}
+			}
+		}
+	}
+
+	// After we establish a connection, we need some time to actually
+	// upgrade it into a Noise connection. With a ballpark worst-case RTT
+	// of 1000ms, give ourselves an extra 5 seconds to complete the
+	// handshake.
+	timeoutSec += 5
+
+	// Be extremely defensive and ensure that the timeout is in the range
+	// [5, 60] seconds (e.g. if we accidentally get a negative number).
+	if timeoutSec > 60 {
+		timeoutSec = 60
+	} else if timeoutSec < 5 {
+		timeoutSec = 5
+	}
+
+	timeout := time.Duration(timeoutSec * float64(time.Second))
+	log.Printf("controlclient: Noise dial timeout: %v", timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	conn, err := (&controlhttp.Dialer{
 		Host:            nc.host,
 		HTTPPort:        nc.httpPort,
@@ -181,11 +218,10 @@ func (nc *noiseClient) dial(_, _ string, _ *tls.Config) (net.Conn, error) {
 		ControlKey:      nc.serverPubKey,
 		ProtocolVersion: uint16(tailcfg.CurrentCapabilityVersion),
 		Dialer:          nc.dialer.SystemDial,
-		//DialPlan:        nc.dialPlan,
+		DialPlan:        dialPlan,
 
 		// TODO(andrew): remove after testing
-		Logf:     log.Printf,
-		DialPlan: fakeDialPlan,
+		Logf: log.Printf,
 	}).Dial(ctx)
 	if err != nil {
 		return nil, err
